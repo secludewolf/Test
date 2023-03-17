@@ -1,0 +1,889 @@
+论文地址：[https://arxiv.org/pdf/2201.12329.pdf](https://link.zhihu.com/?target=https%3A//arxiv.org/pdf/2201.12329.pdf)
+
+论文代码：[GitHub - IDEA-opensource/DAB-DETR: \[ICLR 2022\] DAB-DETR: Dynamic Anchor Boxes are Better Queries for DETR](https://link.zhihu.com/?target=https%3A//github.com/IDEA-opensource/DAB-DETR)
+
+最好先看DETR：[下雨前：DETR论文解读和代码](https://zhuanlan.zhihu.com/p/490647587)
+
+DAB-DETR就是IDEA开始的一系列工作了，包括DN-DETR和DINO(63.3%).
+
+如果对DETR很有兴趣的话，强烈推荐读这个文章，写的非常好。
+
+## 摘要
+
+提出使用动态的anchor box用于DETR。
+
+直接将box的坐标作为queries输出到Transformer的解码器中。在每一层动态更新box。
+
+使用box可以加速训练收敛，同时可以使用box的高宽对位置注意力图建模。
+
+可以认为box query作为一种soft ROI pooling的作用。
+
+在50个epoch可以到达45.7%的AP。（对于deformer-detr不使用2个trick的话是43.8%，使用的话是46.2%）。
+
+## 简介
+
+以前的工作都尝试让每个query更加具体的和某个区域有联系（绑定在一起嘛，就是和YOLO差不多的思想）。不是说多个位置。作者提出使用anchor作为query。可一个提供更好的空间先验信息。
+
+作者认为每个query在DETR中由2部分组成：
+
+1）内容部分(输出bbox，label)
+
+2）位置部分（query是可学习的）
+
+那么相当于每个query都在和编码器的特征图，位置信息做注意力。那么query可以认为是一种池化后的特征和特征图计算相似度。这个位置的相识度是提供位置的限制（这就是位置性，cv性）。哇，这这个解释和理解是真的很棒。终于有解释DETR的query在干什么了。
+
+可以多看下原文
+
+![](https://pic2.zhimg.com/v2-fd4eaaeaf41f647f5f6981a55fd6eb61_b.jpg)
+
+作者研究注意力机制：
+
+![](https://pic4.zhimg.com/v2-fbb6fbdcc5636b82a76c2978d9f1b69b_b.jpg)
+
+看图c，（x, y）是中心点（位置限制）， （w, h）是去可以去调整的anchor。
+
+会先对x, y除以宽高（在softmax以前），帮助匹配不同尺度的目标（归一化了尺度）。
+
+## 相关工作
+
+作者对比了本文工作和以前的工作：从5个不同的维度
+
+![](https://pic4.zhimg.com/v2-884420eb58cde6e2465433b673e2b267_b.jpg)
+
+## 为什么位置的先验可以加速训练？
+
+![](https://pic3.zhimg.com/v2-aa3e41941626c8c45840009aae1ea1ee_b.jpg)
+
+以前的工作证明了训练慢的主要原因是：cross-attention 模块。
+
+作者法是因为query的原因，一开始的decoder embedding都是初始化为0， 都映射到特征图的同一区域。
+
+2个可能的原因：
+
+1） query比较难学习
+
+2） 位置信息在特征图是有的，但是在query是没有的
+
+作者用已经学习的query去训练，发现效果差距不大，那么query比较难学习这个假设是不成立的。
+
+![](https://pic4.zhimg.com/v2-23ccb65a2be2bce911f00c5ca2e95267_b.jpg)
+
+猜想2：query在某些区域找到目标。作者可视化query和位置编码的位置注意力图。
+
+![](https://pic4.zhimg.com/v2-9d2022abf50d794d8953048e9631c95b_b.jpg)
+
+可以看到，每个query可以认为是位置先验，让decoder只关注某一区域（ROI）。
+
+同时query还有一些不想要的性质：多模和基本一致的注意力。
+
+从上图的上面2张可以看到，有多个关注的区域，当有多个目标的时候，很难定位（个人感觉是因为只输出1个bbox和label）。
+
+从上图的下面2张可以看到，这个区域要么很大，要么很小。
+
+作者猜想是多模的原因造成训练慢。使用动态anchor box，让query关注指定区域。
+
+![](https://pic3.zhimg.com/v2-a709b508333ef0a33f1f027a2f3d5c6a_b.jpg)
+
+可以看到收敛速度加快。同时模型关注区域更小，单一化。
+
+![](https://pic2.zhimg.com/v2-64002696d248b03377262671d76a568d_b.jpg)
+
+这个猜想，解释，可视化都做得无比的好。
+
+模型框架：
+
+![](https://pic2.zhimg.com/v2-9c7d294136d56ad93e94e774269fd5f1_b.jpg)
+
+作者还设计了一个DAB-Deformabel-DETR在附录中。
+
+![](https://pic4.zhimg.com/v2-230e6cc3f956053755d057e23237566f_b.jpg)
+
+### 直接学习anchor boxes
+
+在每个decoder层，有2个注意力模块：自注意力和cross注意力机制。分被用来更新query和特征探索（个人理解说就是内容和位置）。
+
+Aq = (xq, yq, wq, hq) 表示第q个anchor。给一个anchor，这个位置query（Pq）的生成是：
+
+![](https://pic2.zhimg.com/v2-c7dff4e56630efc5904ad2d4935cd495_b.jpg)
+
+PE通过正弦信号产生的位置编码。Aq是一个4元素：
+
+![](https://pic1.zhimg.com/v2-880795f99e1e351e4b2b79f457306e74_b.jpg)
+
+拼接在一起。
+
+在自注意力模块，q和k有额外的位置编码：
+
+![](https://pic1.zhimg.com/v2-6367578f390dd806168cf78d7275ce50_b.jpg)
+
+位置编码和内容编码也是拼接在一起。
+
+![](https://pic2.zhimg.com/v2-5b9606a96497f0376e858b91004785a9_b.jpg)
+
+在Decoder（[https://github.com/IDEA-opensource/DAB-DETR/blob/main/models/DAB\_DETR/transformer.py](https://link.zhihu.com/?target=https%3A//github.com/IDEA-opensource/DAB-DETR/blob/main/models/DAB_DETR/transformer.py)）,会有3步
+
+1）decoder self-attn
+
+2) decoder cross-attn
+
+3) FFN
+
+```
+class TransformerDecoderLayer(nn.Module):
+      ....
+      if not self.rm_self_attn_decoder:
+            # Apply projections here
+            # shape: num_queries x batch_size x 256
+            q_content = self.sa_qcontent_proj(tgt)      # target is the input of the first decoder layer. zero by default.
+            q_pos = self.sa_qpos_proj(query_pos)
+            k_content = self.sa_kcontent_proj(tgt)
+            k_pos = self.sa_kpos_proj(query_pos)
+            v = self.sa_v_proj(tgt)
+
+            num_queries, bs, n_model = q_content.shape
+            hw, _, _ = k_content.shape
+
+            q = q_content + q_pos
+            k = k_content + k_pos
+
+            tgt2 = self.self_attn(q, k, value=v, attn_mask=tgt_mask,
+                                key_padding_mask=tgt_key_padding_mask)[0]
+            # ========== End of Self-Attention =============
+
+            tgt = tgt + self.dropout1(tgt2)
+            tgt = self.norm1(tgt)
+
+        # ========== Begin of Cross-Attention =============
+        # Apply projections here
+        # shape: num_queries x batch_size x 256
+        q_content = self.ca_qcontent_proj(tgt)
+        k_content = self.ca_kcontent_proj(memory)
+        v = self.ca_v_proj(memory)
+
+        num_queries, bs, n_model = q_content.shape
+        hw, _, _ = k_content.shape
+
+        k_pos = self.ca_kpos_proj(pos)
+
+        # For the first decoder layer, we concatenate the positional embedding predicted from 
+        # the object query (the positional embedding) into the original query (key) in DETR.
+        if is_first or self.keep_query_pos:
+            q_pos = self.ca_qpos_proj(query_pos)
+            q = q_content + q_pos
+            k = k_content + k_pos
+        else:
+            q = q_content
+            k = k_content
+
+        q = q.view(num_queries, bs, self.nhead, n_model//self.nhead)
+        query_sine_embed = self.ca_qpos_sine_proj(query_sine_embed)
+        query_sine_embed = query_sine_embed.view(num_queries, bs, self.nhead, n_model//self.nhead)
+        q = torch.cat([q, query_sine_embed], dim=3).view(num_queries, bs, n_model * 2)
+        k = k.view(hw, bs, self.nhead, n_model//self.nhead)
+        k_pos = k_pos.view(hw, bs, self.nhead, n_model//self.nhead)
+        k = torch.cat([k, k_pos], dim=3).view(hw, bs, n_model * 2)
+
+        tgt2 = self.cross_attn(query=q,
+                                   key=k,
+                                   value=v, attn_mask=memory_mask,
+                                   key_padding_mask=memory_key_padding_mask)[0]  
+```
+
+Fx,y是图像在（x, y）位置的特征。 .是元素的乘法。
+
+backbone在输出的时候，就是有特征图和位置。
+
+```
+features, pos = self.backbone(samples)
+```
+
+### anchor更新
+
+对每一层的query微调很难。在每一层做一个相对位置的更新：
+
+![](https://pic2.zhimg.com/v2-93c2dad461778f96ba9e7093f268400d_b.jpg)
+
+![](https://pic4.zhimg.com/v2-2d392cac94a7ae8f1fdd66b483b16bbf_b.jpg)
+
+在bbox\_embed\_diff\_each\_layer=False的情况下，这是初始化
+
+```
+self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+```
+
+MLP（吐槽一下，这样写确实是减少代码量，写的也很巧妙，但是就是不太直观了。。。）
+
+简单说下就是使用nn.linear最近变成这个output\_dim维度。
+
+```
+class MLP(nn.Module):
+    """ Very simple multi-layer perceptron (also called FFN)"""
+
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
+        super().__init__()
+        self.num_layers = num_layers
+        h = [hidden_dim] * (num_layers - 1)
+        self.layers = nn.ModuleList(nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
+        return x
+```
+
+这是前向过程
+
+```
+reference_before_sigmoid = inverse_sigmoid(reference)
+tmp = self.bbox_embed(hs)
+tmp[..., :self.query_dim] += reference_before_sigmoid
+outputs_coord = tmp.sigmoid()
+```
+
+### 宽高模型高斯核
+
+传统的位置注意力图都用像高斯分布的先验。如下图：
+
+![](https://pic1.zhimg.com/v2-eb8fd4d1eeecbcd166fd329a78c33388_b.jpg)
+
+这种假设是基于宽高独立分布，所有的目标都是固定大小的。没有考虑到尺度信息。
+
+作者希望加入尺度信息在这个注意力中。作者发先先除上anchor的相对宽高，会对不同尺度匹配更好。
+
+![](https://pic1.zhimg.com/v2-9ef493e49968f77dd2d1027a4ee69cb0_b.jpg)
+
+![](https://pic1.zhimg.com/v2-b4cf32feeaaa3cd282f24598662cc504_b.jpg)
+
+### 温度微调
+
+在tranformer中，T是10000，在DETR中，作者发现T=20最好。
+
+![](https://pic1.zhimg.com/v2-17040724633bab38f30f7243002c3588_b.jpg)
+
+作者默认为20
+
+```
+parser.add_argument('--pe_temperatureH', default=20, type=int, 
+                        help="Temperature for height positional encoding.")
+parser.add_argument('--pe_temperatureW', default=20, type=int, 
+                        help="Temperature for width positional encoding.")
+```
+
+这是PEHW
+
+```
+class PositionEmbeddingSineHW(nn.Module):
+    """
+    This is a more standard version of the position embedding, very similar to the one
+    used by the Attention is all you need paper, generalized to work on images.
+    """
+    def __init__(self, num_pos_feats=64, temperatureH=10000, temperatureW=10000, normalize=False, scale=None):
+        super().__init__()
+        self.num_pos_feats = num_pos_feats
+        self.temperatureH = temperatureH
+        self.temperatureW = temperatureW
+        self.normalize = normalize
+        if scale is not None and normalize is False:
+            raise ValueError("normalize should be True if scale is passed")
+        if scale is None:
+            scale = 2 * math.pi
+        self.scale = scale
+
+    def forward(self, tensor_list: NestedTensor):
+        x = tensor_list.tensors
+        mask = tensor_list.mask
+        assert mask is not None
+        not_mask = ~mask
+        y_embed = not_mask.cumsum(1, dtype=torch.float32)
+        x_embed = not_mask.cumsum(2, dtype=torch.float32)
+
+        # import ipdb; ipdb.set_trace()
+
+        if self.normalize:
+            eps = 1e-6
+            y_embed = y_embed / (y_embed[:, -1:, :] + eps) * self.scale
+            x_embed = x_embed / (x_embed[:, :, -1:] + eps) * self.scale
+
+        dim_tx = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
+        dim_tx = self.temperatureW ** (2 * (dim_tx // 2) / self.num_pos_feats)
+        pos_x = x_embed[:, :, :, None] / dim_tx
+
+        dim_ty = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
+        dim_ty = self.temperatureH ** (2 * (dim_ty // 2) / self.num_pos_feats)
+        pos_y = y_embed[:, :, :, None] / dim_ty
+
+        pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3)
+        pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3)
+        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
+
+        # import ipdb; ipdb.set_trace()
+
+        return pos
+```
+
+### LOSS
+
+DAB-DETR是用的focal-loss:
+
+gamma调整困难样本和简单样本， alpha调整正负样本。
+
+```
+def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
+    """
+    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+        alpha: (optional) Weighting factor in range (0,1) to balance
+                positive vs negative examples. Default = -1 (no weighting).
+        gamma: Exponent of the modulating factor (1 - p_t) to
+               balance easy vs hard examples.
+    Returns:
+        Loss tensor
+    """
+    prob = inputs.sigmoid()
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    p_t = prob * targets + (1 - prob) * (1 - targets)
+    loss = ce_loss * ((1 - p_t) ** gamma)
+
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        loss = alpha_t * loss
+
+
+    return loss.mean(1).sum() / num_boxes
+```
+
+DAB-DETR loss和DETR是很不一样的。
+
+DETR是计算label, L1, GIOU的组合产生的Cost Matrxi，用匈牙利算法去找到最优匹配。
+
+DAB-DETR是2步：
+
+1）通过匈牙利算法分配gt和pred
+
+2）简读每一对GT和pred
+
+初始化，
+
+```
+class SetCriterion(nn.Module):
+    """ This class computes the loss for Conditional DETR.
+    The process happens in two steps:
+        1) we compute hungarian assignment between ground truth boxes and the outputs of the model
+        2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
+    """
+    def __init__(self, num_classes, matcher, weight_dict, focal_alpha, losses):
+        """ Create the criterion.
+        Parameters:
+            num_classes: number of object categories, omitting the special no-object category
+            matcher: module able to compute a matching between targets and proposals
+            weight_dict: dict containing as key the names of the losses and as values their relative weight.
+            losses: list of all the losses to be applied. See get_loss for list of available losses.
+            focal_alpha: alpha in Focal Loss
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.matcher = matcher
+        self.weight_dict = weight_dict
+        self.losses = losses
+        self.focal_alpha = focal_alpha
+```
+
+计算过程
+
+```
+def forward(self, outputs, targets, return_indices=False):
+""" This performs the loss computation.
+Parameters:
+ outputs: dict of tensors, see the output specification of the model for the format
+ targets: list of dicts, such that len(targets) == batch_size.
+  The expected keys in each dict depends on the losses applied, see each loss' doc
+
+ return_indices: used for vis. if True, the layer0-5 indices will be returned as well.
+"""
+
+outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
+
+# Retrieve the matching between the outputs of the last layer and the targets
+indices = self.matcher(outputs_without_aux, targets)
+if return_indices:
+indices0_copy = indices
+indices_list = []
+
+# Compute the average number of target boxes accross all nodes, for normalization purposes
+num_boxes = sum(len(t["labels"]) for t in targets)
+num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
+if is_dist_avail_and_initialized():
+torch.distributed.all_reduce(num_boxes)
+num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+
+# Compute all the requested losses
+losses = {}
+for loss in self.losses:
+losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
+
+# In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
+if 'aux_outputs' in outputs:
+for i, aux_outputs in enumerate(outputs['aux_outputs']):
+indices = self.matcher(aux_outputs, targets)
+if return_indices:
+indices_list.append(indices)
+for loss in self.losses:
+if loss == 'masks':
+# Intermediate masks losses are too costly to compute, we ignore them.
+continue
+kwargs = {}
+if loss == 'labels':
+# Logging is enabled only for the last layer
+kwargs = {'log': False}
+l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
+l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
+losses.update(l_dict)
+
+if return_indices:
+indices_list.append(indices0_copy)
+return losses, indices_list
+
+return losses
+```
+
+**和DETR一样，DAB-DETR的代码也行的很清楚明白。**
+
+backbone -> proj -> transformer -> self.class\_embed. self.bbox\_embed 输出
+
+（又吐槽一下，为啥要一个linear转化成输出，要叫class\_embed, bbox\_embed。。。）
+
+```
+class DABDETR(nn.Module):
+    """ This is the DAB-DETR module that performs object detection """
+    def __init__(self, backbone, transformer, num_classes, num_queries, 
+                    aux_loss=False, 
+                    iter_update=True,
+                    query_dim=4, 
+                    bbox_embed_diff_each_layer=False,
+                    random_refpoints_xy=False,
+                    ):
+        """ Initializes the model.
+        Parameters:
+            backbone: torch module of the backbone to be used. See backbone.py
+            transformer: torch module of the transformer architecture. See transformer.py
+            num_classes: number of object classes
+            num_queries: number of object queries, ie detection slot. This is the maximal number of objects
+                         Conditional DETR can detect in a single image. For COCO, we recommend 100 queries.
+            aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
+            iter_update: iterative update of boxes
+            query_dim: query dimension. 2 for point and 4 for box.
+            bbox_embed_diff_each_layer: dont share weights of prediction heads. Default for True.(shared weights.)
+            random_refpoints_xy: random init the x,y of anchor boxes and freeze them. (It sometimes helps to improve the performance)
+            
+        """
+        super().__init__()
+        self.num_queries = num_queries
+        self.transformer = transformer
+        hidden_dim = transformer.d_model
+        self.class_embed = nn.Linear(hidden_dim, num_classes)
+        self.bbox_embed_diff_each_layer = bbox_embed_diff_each_layer
+        if bbox_embed_diff_each_layer:
+            self.bbox_embed = nn.ModuleList([MLP(hidden_dim, hidden_dim, 4, 3) for i in range(6)])
+        else:
+            self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        
+
+        # setting query dim
+        self.query_dim = query_dim
+        assert query_dim in [2, 4]
+
+        self.refpoint_embed = nn.Embedding(num_queries, query_dim)
+        self.random_refpoints_xy = random_refpoints_xy
+        if random_refpoints_xy:
+            # import ipdb; ipdb.set_trace()
+            self.refpoint_embed.weight.data[:, :2].uniform_(0,1)
+            self.refpoint_embed.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed.weight.data[:, :2])
+            self.refpoint_embed.weight.data[:, :2].requires_grad = False
+
+        self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
+        self.backbone = backbone
+        self.aux_loss = aux_loss
+        self.iter_update = iter_update
+
+        if self.iter_update:
+            self.transformer.decoder.bbox_embed = self.bbox_embed
+
+
+        # init prior_prob setting for focal loss
+        prior_prob = 0.01
+        bias_value = -math.log((1 - prior_prob) / prior_prob)
+        self.class_embed.bias.data = torch.ones(num_classes) * bias_value
+
+        # import ipdb; ipdb.set_trace()
+        # init bbox_embed
+        if bbox_embed_diff_each_layer:
+            for bbox_embed in self.bbox_embed:
+                nn.init.constant_(bbox_embed.layers[-1].weight.data, 0)
+                nn.init.constant_(bbox_embed.layers[-1].bias.data, 0)
+        else:
+            nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
+            nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
+
+        
+
+    def forward(self, samples: NestedTensor):
+        """ The forward expects a NestedTensor, which consists of:
+               - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
+               - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
+            It returns a dict with the following elements:
+               - "pred_logits": the classification logits (including no-object) for all queries.
+                                Shape= [batch_size x num_queries x num_classes]
+               - "pred_boxes": The normalized boxes coordinates for all queries, represented as
+                               (center_x, center_y, width, height). These values are normalized in [0, 1],
+                               relative to the size of each individual image (disregarding possible padding).
+                               See PostProcess for information on how to retrieve the unnormalized bounding box.
+               - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
+                                dictionnaries containing the two above keys for each decoder layer.
+        """
+        if isinstance(samples, (list, torch.Tensor)):
+            samples = nested_tensor_from_tensor_list(samples)
+        features, pos = self.backbone(samples)
+
+        src, mask = features[-1].decompose()
+        assert mask is not None
+        # default pipeline
+        embedweight = self.refpoint_embed.weight
+        hs, reference = self.transformer(self.input_proj(src), mask, embedweight, pos[-1])
+        
+        
+        
+        if not self.bbox_embed_diff_each_layer:
+            reference_before_sigmoid = inverse_sigmoid(reference)
+            tmp = self.bbox_embed(hs)
+            tmp[..., :self.query_dim] += reference_before_sigmoid
+            outputs_coord = tmp.sigmoid()
+        else:
+            reference_before_sigmoid = inverse_sigmoid(reference)
+            outputs_coords = []
+            for lvl in range(hs.shape[0]):
+                tmp = self.bbox_embed[lvl](hs[lvl])
+                tmp[..., :self.query_dim] += reference_before_sigmoid[lvl]
+                outputs_coord = tmp.sigmoid()
+                outputs_coords.append(outputs_coord)
+            outputs_coord = torch.stack(outputs_coords)
+
+        outputs_class = self.class_embed(hs)
+        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
+        if self.aux_loss:
+            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+        return out
+
+    @torch.jit.unused
+    def _set_aux_loss(self, outputs_class, outputs_coord):
+        # this is a workaround to make torchscript happy, as torchscript
+        # doesn't support dictionary with non-homogeneous values, such
+        # as a dict having both a Tensor and a list.
+        return [{'pred_logits': a, 'pred_boxes': b}
+                for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
+```
+
+## 实验
+
+![](https://pic2.zhimg.com/v2-2b45acab440a80f32b6671f635fa4245_b.jpg)
+
+消融实验也证明了每个设计的有效性。
+
+## 个人总结
+
+这篇文章，真的写的非常好，不论是给问题定位，解决问题的猜想和方法，可视化，解释原因，都非常好。学习了很多，而且对query有一个非常符合直觉的解释。
+
+这又回到了先验知识的问题了，让模型自己学习先验知识好，还是给模型一些先验知识好。但是从训练来说，给先验知识，基本上意味着更快的训练速度和更少的数据。从CNN和VIT就能感觉出来。感觉这个事情，就像异或运算一样，如果知道是异或运算，就可以直接用异或运算。不知道是异或运算，只有用模型去拟合。重要的就是在这个世界上，未知的事情太多，已知的太少。。。
+
+
+
+
+
+> 论文链接：https://[arxiv](https://so.csdn.net/so/search?q=arxiv&spm=1001.2101.3001.7020).org/abs/2201.12329
+
+最大的贡献是把[DETR](https://so.csdn.net/so/search?q=DETR&spm=1001.2101.3001.7020)的Object Query定义为**可学习**的**Anchor**
+
+[Anchor](https://so.csdn.net/so/search?q=Anchor&spm=1001.2101.3001.7020)\-based DETR来临了  
+（还有点争议，说是Anchor-based，这Anchor又不是预定义的，说是Anchor-free，这Anchor也不是由image feature end-to-end预测来的）
+
+首先是一个实验，为啥DETR收敛这么慢？首先排除backbone的原因，因为是预训练好的，那就只能是Decoder的原因。  
+其中，Decoder包含好几个部分，包括输入，Decoder，输出的匈牙利匹配，本篇是在**输入Query**上下文章。
+
+输入的可学习的Query，会不会是因为Query学的太慢了呢？于是干脆直接把Query固定为在COCO上预训练好的，看会不会收敛快一点，结果令人比较失望：  
+![在这里插入图片描述](data/88835a94d02142d0bac3aa6026761e12.png)  
+并没有提多少，这说明不是Query学的慢了，而是Decoder学的慢了，给他一样的好的Query，他也得不到好的输出结果，导致每次匈牙利算法匹配的结果都不一样。  
+因此加速收敛本质上是**加速Decoder的学习**
+
+要加速Decoder，有几个方面，  
+一是使用更好的Decoder（如何定义更好，不得而知）  
+二是喂给它**更好的sample与监督**。  
+第二个方面就引申出了包括本篇在内的后面几个工作
+
+如何定义“更好”？  
+首先得搞明白喂进去的输入是个啥？  
+![在这里插入图片描述](data/85ce21c849354a71a3a336eafdafaa82.png)  
+（1）左边是Encoder，右边是Decoder，可以看到K是**feature embedding + positional embedding** ，Q是**feature embedding + Queries**，
+
+（2）其中，Q的“feature embedding”实际上是上一层Decoder的输出，也就是**Value**（Encoder的**Feature** embedding）根据注意力**取出来的一部分**，是不是**很像ROI pooling**？只是这里取的不是一部分区域，而是这个区域经过全局注意力之后的结果，相当于是**多了Context**
+
+从（1）的角度看，Query可以类比为**Positional Embedding**，从（2）的角度看，Query是否就是**Proposal**？或者说，Proposal的位置信息，也就是**Anchor**
+
+综上所述，Query实际上就是**Positional Embedding形式的Anchor**，与Decoder Embedding相加后，相当于是给ROI pooling后的Feature上PE（positional  
+embedding），用于继续跟总Feature求注意力矩阵，拿ROI。
+
+经过多层堆叠之后，拿到了最精确的ROI，就可以过FFN输出分类和回归结果（DETR的做法）
+
+》》》》》》》》》》》》》》  
+有什么问题？  
+（1）凭什么多层堆叠就能拿到更精确的ROI？->这是由最后一层的监督决定的，不过可能也是导致其收敛慢的原因。  
+要想其收敛更快，显然的方法就是给它**更多的监督**\==>每一个layer都给它一个gt的监督  
+这里又引出几个问题：  
+1、layer输出的并不是bbox，如何用gt的bbox去监督？  
+2、每个layer如何做正样本分配？  
+对于第一个问题，有几种方式可以解决：  
+1’ 在每个layer加个FFN检测头，输出分类和回归的结果  
+2还没想到  
+DAB-DETR就是采用的1’的做法  
+![在这里插入图片描述](data/c50a69529758411b8e70b6f73869004f.png)  
+不同的是，只输出回归的结果，也就是 Δ x , Δ y , Δ w , Δ h \\Delta{x},\\Delta{y},\\Delta{w},\\Delta{h} Δx,Δy,Δw,Δh，同时，Query就是用sin与cos编码后的anchor  
+![在这里插入图片描述](data/2f8759d35ccb436499078c30eb084964.png)  
+因此，可以拿编码前的结果与输出的回归系数相加，得到输出的proposal（用gt监督），同时，这个proposal又可以作为下一阶段的Query输入，相当于下一阶段又更精确的Proposal。很妙，也是很自然的想法
+
+现在来解决第二个问题，每个layer输出的N个proposal用**哪个gt来监督**？  
+很自然的想法就是遵循常规OD，用IoU最大的来监督/  
+想多了，直接用DETR最后的匈牙利算法来分配样本算了。。
+
+》》》》》》》》》》  
+插播一篇Conditional-DETR：
+
+> https://arxiv.org/pdf/2108.06152.pdf
+
+是DAB-DETR里这条支路的由来：  
+![在这里插入图片描述](data/9fed83e629b9441c8a43b6fa27ce7b0a.png)  
+为啥这里decoder embedding要和anchor乘一下再作为positional  
+query呢？  
+答：因为最终decoder embedding是设计了用来**预测anchor的中心位置偏移量的**，也就是 Δ x , Δ y \\Delta{x},\\Delta{y} Δx,Δy，所以这里要把偏移量给它乘上去，相当于得到一个refine的anchor。  
+（为什么**用乘不用加**：个人猜测因为这是在128维的positional embedding上做的操作，不比x,y的直接数值加减，因此用transform向量来element-wise改变每个维度的数值可能更好）
+
+问题是你这\*\*是用在DAB-DETR上的啊？？？  
+DAB的anchor都已经是用decoder embedding **refine过的anchor了**，你这里再来一遍有啥意义？  
+![在这里插入图片描述](data/d991dc58614b46a6b38852da152f3a42.png)  
+nnd，合着DAB的贡献就是在Conditional的基础上做了个多级refine，positional query显式设置为可学习anchor，加了个不知道有没有用的h,w限制（好像是有0.7个点的作用）（看了一天这系列的论文有点烦躁了。。）  
+》》》》
+
+接下来就是这条分支  
+![在这里插入图片描述](data/da3facfbe3f840b18dde25299d318924.png)
+
+咋一看还挺唬人的  
+其实如果不看红色线路，实际上就是Query作为positional embedding分别**加**或者**concat**到feature上。因为每层Decoder都有self-attn和cross-attn，所以用了两次  
+至于红色的线路，就是在anchor的Embedding上乘个系数，来调整anchor的宽高  
+![在这里插入图片描述](data/0d461fd9f8304813988707437c314f6e.png)
+
+to:![在这里插入图片描述](data/3e1480e59be64de89b7aedb2709239e5.png)  
+也就是**anchor的w和偏移量的w的比值**（因为从Conditional的设定上decoder embedding是预测偏移量的）  
+有什么说法？  
+我们先看看原始的attn矩阵：  
+假设anchor就一个x坐标，经过pe得到PE(x)，与key的Positional embedding矩阵的每个向量相乘，求相似度，得到一行数据假设为(0.1, 0.1, 0.4, 0.6, 0.9, 0.6, 0.4, 0.1, 0.1)，这里给它乘上一个数n，如果>1，相当于把原始attn扩大n倍，假设我们认为>0.5的部分是anchor关注的位置，这里就相当于给它扩大了。
+
+如果anchor是二维坐标(x, y)，经过PE得到PE(x)和PE(y)，concat在一起得到\[PE(x), PE(y)\]  
+，与key的Positional embedding相乘，得到这个点与对应点的相似度，与所有点相乘，就得到一行数据(0.1, 0.1, 0.4, 0.6, 0.9, 0.6, 0.4, 0.1, 0.1)，其中第一个数，  
+0.1 = P E ( x ) ∗ P E ( x r e f ) + P E ( y ) ∗ P E ( y r e f ) 0.1=PE(x)\*PE(x\_{ref})+PE(y)\*PE(y\_{ref}) 0.1\=PE(x)∗PE(xref)+PE(y)∗PE(yref)，如果只给前者乘上一个数会将这个数变大(若n>1)，给后者乘上n，会变更大。。  
+然后呢？
+
+仔细看，attn map：  
+![在这里插入图片描述](data/2a83696ea7b7432ab4c50d676b6f572c.png)  
+这确实是1个query和所有positional embedding的attn矩阵  
+为什么还是个矩阵？  
+设query: **\[channels,\]**  
+positional embedding: **\[n, channels\]**，  
+向量和矩阵相乘应该还是一个向量啊，表示query和n个embedding的中的每个的相似度
+
+实际上，我们仔细想想，这是图片啊，所以\[n, channels\]实际上可以先拉成\[h, w, channels\]的3维矩阵  
+这样求相似度，就能得到一个**二维的attn-map**。
+
+再想想在x,y上加权重对attn-map的影响  
+麻了，想了半天，凭啥加权重影响attn-map的形状啊？根据那个公式，权重>1的情况，加了之后，会增加所有点的值，凭啥让它依据w，h的形状变化。  
+另外：  
+实现上是这样的，先把 w r e f / w w\_{ref}/w wref/w求出来，乘上 P E ( x r e f ) PE(x\_{ref}) PE(xref)，后面再直接当作k，做cross-attn  
+![在这里插入图片描述](data/841e27abd590462b975d5ff7abf38d77.png)  
+关键一点是，在做cross-attn之前，还对这个embedding过了一个MLP  
+![在这里插入图片描述](data/d3bff809d4854906b6e74482a3be6baf.png)  
+这意味着啥？  
+w和h信息没有线性地作用在corss-attention上，而是过了一个未知的MLP  
+相当于是**把w和h信息给它送进去，至于它怎么用，看它自己了**  
+只是最终训好后的可视化效果确实达到了预期目标：  
+![在这里插入图片描述](data/fc3fd921e44042b8b73427c82109dbd2.png)
+
+___
+
+补充一点，那个concat是**横着concat的**  
+也就是说， ( n 1 , 128 ) (n\_1, 128) (n1,128)和 ( n 2 , 128 ) (n\_2, 128) (n2,128)concat在一起变成 ( n 1 , 256 ) (n\_1, 256) (n1,256)。 ( n 1 = n 2 ) (n\_1=n\_2) (n1\=n2)  
+![在这里插入图片描述](data/0c2777a6303944e190d2af4f8601fdf1.png)  
+所以在Q和K求内积的时候，content和content做内积，position和position做内积，**不会有content和position做内积的情况**，相当于减少了一部分attn-map中的噪声。  
+如果用加法的话，就会是这样：  
+![在这里插入图片描述](data/6dddd0954ad54c41bb469e28ff4c5bd9.png)  
+用concat就是这样：  
+![在这里插入图片描述](data/81035f9da2eb4f5d8df8c5bd5e34c2a4.png)  
+不过这是Conditional-DETR的工作
+
+
+
+
+
+
+
+### 来分享一下我们ICLR 2022的文章**DAB-DETR， 我们将在这里介绍文章的主要内容，以及我们对于目标检测问题的思考。**
+
+### 文章链接
+
+arxiv链接: [DAB-DETR: Dynamic Anchor Boxes are Better Queries for DETR](https://link.zhihu.com/?target=https%3A//arxiv.org/abs/2201.12329)
+
+readpaper链接：[DAB-DETR: Dynamic Anchor Boxes are Better Queries for DETR-ReadPaper论文阅读平台](https://link.zhihu.com/?target=https%3A//readpaper.com/paper/4588454363555438593)
+
+### 这篇文章知乎上已经有不少很棒的解读，非常详细和有启发性，大家也可以一同食用：
+
+[找到 DETR 慢收敛的罪魁祸首了！DAB-DETR 利用迭代更新的 Anchor Box 作为位置先验，将 DETR 演绎成为 Soft ROI-Pooling 并实现快收敛 - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/560513044)
+
+[DAB-DETR阅读 - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/494600828)
+
+非常感谢上面作者的详细解读。
+
+### 我们的代码已经开源：
+
+原始repo:
+
+另外我们提供了官方的基于Transformer检测工具包**detrex** ，这一工具包包含了DETR, Deformable DETR, Conditional DETR, DAB-DETR, DN-DETR, 以及在COCO获得了63.3AP的DINO，并将进一步支持更多的DETR类模型:
+
+___
+
+## TL;DR
+
+DAB-DETR提出了一种新的建模DETR中query的方式，使用4维的anchor box，这一建模方式不仅使得DETR query有了可解释性，同时作为位置先验可以加速模型收敛，以及利用box的尺度信息调制注意力图。
+
+这一建模方式也将DETR类模型和传统的two-stage模型如Faster RCNN联系了起来。decoder中cross-attention的作用类似于ROI pooling或者ROI align，我们称之为soft-ROI pooling。
+
+### 模型性能：
+
+| 模型                               | mAP(原始 repo) | mAP(基于detrex) |
+| ---------------------------------- | -------------- | --------------- |
+| DETR-R50 (500 epoch)               | 42.0           | \-              |
+| DAB-DETR-R50 (50 epoch)            | 42.2           | 43.3            |
+| Deformable-DETR-R50 (50 epoch)     | 46.9           | \-              |
+| DAB-Deformable-DETR-R50 (50 epoch) | 48.7           | 48.9            |
+
+我们的formulation可以使用在原始DETR或者Deformable DETR上，都能相比于原始模型带来很大的增益。另外，基于我们新的算法库**detrex** 的模型带来了更好的结果。
+
+## 文章内容简述
+
+### 动机和分析
+
+DETR作为首个使用Transformer做目标检测的模型，非常具有创新性。他将目标检测建模成集合预测的任务，即输入一组（如100个）learnable的query，然后输入对应数量（如100个）的物体预测结果。在训练过程中，使用二分图匹配预测和标签进行训练，而测试时不需要后处理（如nms）即可产生所有结果。
+
+尽管很简单、优雅，但是DETR存在两个问题，一是**query含义并不清楚**，不可解释，二是**模型收敛慢**。本来这应该是两个独立问题，不过后来我们发现，DETR收敛慢很大程度上来自于query含义的不明。
+
+**DETR中的query**
+
+在原始的DETR文章中的object query画的比较简单，可能会让人觉得query就是一组向量：
+
+![](data/v2-6a9cd6121d28e15f2738bd2f37a62917_b.jpg)
+
+然而实际上object query应该有两部分组成，我们称之为**content query**和**positional query**（这里感谢conditional detr，这两个名字由他们提出。）我们这里画出来了encoder和decoder中的attention的组成部分。
+
+![](data/v2-d5f73705b724e1bd0384032689bd1aac_b.jpg)
+
+可以看到，encoder和decoder里attention和query和key都是由两部分组成的，比如encoder里的query分别来自于图像特征（包含语义信息）和位置编码（包含位置信息），因此这两部分分别称为content query（对应图像特征）和positional query（对应位置编码）。key和query完全相同。value只有图像特征这一语义部分。
+
+再看decoder，decoder的key和value与encoder的组成完全相同，但是query则不同。query的语义部分来自于decoder embeddings，对应上层的输入，是由图像特征组合来的。而**位置部分则来自于learnable queries**，这是与我们看DETR的框架图后的第一反应不同的。因此decoder的learnable query实际指代的是位置信息。
+
+### Cross-attention的作用与soft-ROI pooling
+
+接下来我们想来说明一下cross-attention在做什么，以及与传统的Faster RCNN之间的关系。
+
+![](data/v2-740ed1427b354af09bbfcf97f6321a9d_b.jpg)
+
+我们看到，在attention模块中，query和key计算相似度，同时考虑了content信息和positional 信息，计算出一个注意力图，然后使用这个注意力图从原始图片特征中提取特征。
+
+这个步骤非常类似于传统两阶段检测器中的ROI pooling（或者ROI align）。但是由于注意力图是有query和key共同决定的，并不局限于物体框内信息，我们称之为**Soft ROI pooling**。
+
+### 将query建模成anchor box
+
+**learnable query 不够好**
+
+既然了解了attention及decoder的作用，下面我们看原始的detr中query问题在哪。
+
+我们发现，原始的learnable query学习到的特征并不够好，即不能提供soft roi pooling中所需的roi信息。
+
+![](data/v2-5f16292118c231994bfb01c3782d841a_b.jpg)
+
+如图，训练前后的learnable query产生的位置注意力图仍然存在多模式、退化解等现象，并不能为soft roi pooling提供roi的信息。
+
+那么很自然的，我们意识到，要为cross attention提供更好的位置先验，提供更好的roi region。很自然的，传统两阶段检测器中的anchor box可以引入到模型中作为位置先验。
+
+**引入anchor box作为query提供位置先验**
+
+![](data/v2-7ec59e707c0924f81bdc0561605d1087_b.jpg)
+
+将anchor box引入之后的好处有：
+
+-   query有了可解释性。
+-   为模型提供了位置先验，加速收敛。
+-   anchor box中的位置信息可以用来调制注意力图。
+-   anchor box可以层与层进行更新。
+
+anchor box直接提供了roi区域用来做soft roi pooling，因而这一描述也更加的自然。
+
+**模型改进简述**
+
+![](data/v2-93dc557f19387cd0b4b2ff1b58a53aa0_b.jpg)
+
+我们将我们的模型和DETR&Conditional DETR的对比列了出来。我们核心改进有：
+
+-   直接学习anchor box作为query
+-   使用正余弦编码后的x,y作为positional query
+-   使用w,h调制注意力图
+-   层与层更新anchor box
+
+### DAB-Deformable-DETR
+
+我们的建模方式也是通用的，我们将anchor box的建模方式用到deformble DETR里，依然能带来性能的提升。
+
+### DETR类模型对比
+
+我们在文章里做了很多对比，包括将DAB-DETR和之前的DETR系列做对比：
+
+![](data/v2-17ee004abadb5e8434daa5c87ff4126b_b.jpg)
+
+## DAB-DETR & Faster RCNN
+
+这里其实更想和大家分享关于DETR和传统检测器进行对比。从我们的讨论中我们看到，DETR中的encoder起到了特征增强的作用，类似于一个non-local的模块。
+
+而更令人着迷的decoder则起到了类似于two-stage模型中ROI head的作用，通过Soft ROI pooling的方式不断从特征图中采集特征，进行box的回归。而多个decoder layer又起到了类似于cascade RCNN，类似于级联的ROI head的效果。
+
+那么现在来看除了结构上（Transformer和卷积）以外，DAB-DETR和Faster RCNN还有哪些区别：
+
+一是box产生的方式。Faster RCNN来自于RPN，而DAB-DETR来自于learnable的anchor box（从这个意义上 DAB-DETR更像是Sparse RCNN）。那如果我们也将DAB-DETR的anchor box来自一个RPN或者encoder输出（Deformble DETR 已经做了），我们也可以构造一个two stage的DAB-DETR，也会有更好的性能。
+
+二是标签分配的方式。DETR类模型的匹配是匈牙利匹配，one-to-one，同时考虑content和position，在layer之后；而Faster RCNN是one-to-many(一个gt可能对应多个anchor)，只考虑position，在layer之前。那么最理想的匹配方式是什么？有没有更好的匹配方案？也是一个值得研究的问题。这里推荐peize大佬的一篇文章[What Makes for End-to-End Object Detection?-ReadPaper论文阅读平台](https://link.zhihu.com/?target=https%3A//readpaper.com/paper/3179092682)很有启发意义。
+
+综上，DETR结构也可以看做是一种two stage模型，只是用了不同的模型结构（Transformer）和标签分配方式（匈牙利匹配）。
+
+那么从研究的角度出发，之前在two stage models领域的很多研究，或许都可以搬到DETR/DAB-DETR这么一个框架下来，欢迎大家能和我们一起探索这一领域。
+
+## 写在最后
+
+我们后续又提出了DN-DETR, DINO等工作
+
+也欢迎大家试用我们的**detrex** 工具包
+
+我们充分相信Transformer-based/DETR类模型将会称为目标检测带来更广泛的影响，希望更多人来一同推动这一领域的发展。
+
+
+
+
+
+
+
